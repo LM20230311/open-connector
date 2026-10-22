@@ -385,6 +385,42 @@ export function createOpenApiDocument(
         errorStatuses: [401, 404],
       },
     ),
+    "/v1/providers/slackbot/events/verify": {
+      post: {
+        tags: ["Triggers"],
+        summary: "Verify an inbound Slack Events API request.",
+        description:
+          "Requires the dedicated OOMOL_CONNECT_EVENT_VERIFY_TOKEN. The raw Slack request body is verified against the slackbot OAuth client configuration; no event is stored or scheduled.",
+        parameters: [
+          {
+            name: "x-slack-request-timestamp",
+            in: "header",
+            required: true,
+            schema: jsonSchema.string(),
+          },
+          { name: "x-slack-signature", in: "header", required: true, schema: jsonSchema.string() },
+        ],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object", additionalProperties: true } } },
+        },
+        responses: {
+          200: jsonResponse({
+            type: "object",
+            properties: {
+              valid: { type: "boolean" },
+              appId: { type: "string" },
+              challenge: { type: "string", nullable: true },
+            },
+            required: ["valid", "appId", "challenge"],
+          }),
+          400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+          401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+          404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+          413: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        },
+      },
+    },
     "/v1/providers/{service}/triggers/{triggerId}/execute": {
       post: {
         tags: ["Triggers"],

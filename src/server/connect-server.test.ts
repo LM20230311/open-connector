@@ -142,6 +142,199 @@ afterEach(() => {
 });
 
 describe("ConnectServer", () => {
+  describe("Slack inbound event verification", () => {
+    const slackProvider: ProviderDefinition = {
+      ...oauthProvider,
+      service: "slackbot",
+      displayName: "Slack Bot",
+      auth: [
+        {
+          ...(oauthProvider.auth[0] as Extract<ProviderDefinition["auth"][number], { type: "oauth2" }>),
+          clientConfigFields: [
+            {
+              key: "appId",
+              label: "App ID",
+              inputType: "text",
+              required: false,
+              secret: false,
+            },
+            {
+              key: "signingSecret",
+              label: "Signing Secret",
+              inputType: "password",
+              required: false,
+              secret: true,
+              location: "secretExtra",
+            },
+          ],
+        },
+      ],
+    };
+    const signingSecret = "route-signing-secret";
+
+    async function sign(body: string, timestamp: string): Promise<string> {
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(signingSecret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"],
+      );
+      const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`v0:${timestamp}:${body}`)));
+      return `v0=${[...mac].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+    }
+
+    async function configure(app: ReturnType<ConnectServer["createApp"]>): Promise<void> {
+      const response = await app.request("/api/oauth/configs/slackbot", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          clientId: "client",
+          clientSecret: "secret",
+          extra: { appId: "A123" },
+          secretExtra: { signingSecret },
+        }),
+      });
+      expect(response.status).toBe(200);
+    }
+
+    async function verifyRequest(
+      app: ReturnType<ConnectServer["createApp"]>,
+      body: string,
+      headers: Record<string, string> = {},
+    ): Promise<Response> {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      return app.request("/v1/providers/slackbot/events/verify", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer verify-token",
+          "x-slack-request-timestamp": timestamp,
+          "x-slack-signature": await sign(body, timestamp),
+          ...headers,
+        },
+        body,
+      });
+    }
+
+    it("is disabled when no verification token is configured", async () => {
+      const app = createTestServer([slackProvider]).createApp();
+      const response = await app.request("/v1/providers/slackbot/events/verify", { method: "POST", body: "{}" });
+      expect(response.status).toBe(404);
+    });
+
+    it("rejects a missing or wrong bearer token", async () => {
+      const app = createTestServer([slackProvider], {
+        eventVerifyToken: "verify-token",
+      }).createApp();
+      await configure(app);
+      expect((await verifyRequest(app, "{}", { authorization: "Bearer wrong" })).status).toBe(401);
+      expect((await verifyRequest(app, "{}", { authorization: "" })).status).toBe(401);
+    });
+
+    it("reports not configured until appId and signing secret are saved", async () => {
+      const app = createTestServer([slackProvider], {
+        eventVerifyToken: "verify-token",
+      }).createApp();
+      expect((await verifyRequest(app, "{}")).status).toBe(404);
+    });
+
+    it("accepts a signed event for the configured app and does not require the admin token", async () => {
+      const app = createTestServer([slackProvider], {
+        eventVerifyToken: "verify-token",
+        auth: { adminToken: "admin-token", runtimeToken: "runtime-token" },
+      }).createApp();
+      const configured = await app.request("/api/oauth/configs/slackbot", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer admin-token",
+        },
+        body: JSON.stringify({
+          clientId: "client",
+          clientSecret: "secret",
+          extra: { appId: "A123" },
+          secretExtra: { signingSecret },
+        }),
+      });
+      expect(configured.status).toBe(200);
+      const body = JSON.stringify({
+        type: "event_callback",
+        api_app_id: "A123",
+      });
+      const response = await verifyRequest(app, body);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        valid: true,
+        appId: "A123",
+        challenge: null,
+      });
+    });
+
+    it("rejects a forged signature and a foreign app id", async () => {
+      const app = createTestServer([slackProvider], {
+        eventVerifyToken: "verify-token",
+      }).createApp();
+      await configure(app);
+      const body = JSON.stringify({
+        type: "event_callback",
+        api_app_id: "A123",
+      });
+      expect(
+        (
+          await verifyRequest(app, body, {
+            "x-slack-signature": `v0=${"0".repeat(64)}`,
+          })
+        ).status,
+      ).toBe(401);
+      const foreign = await verifyRequest(app, JSON.stringify({ type: "event_callback", api_app_id: "AOTHER" }));
+      expect(foreign.status).toBe(401);
+      expect(await foreign.json()).toEqual({
+        error: "invalid_request",
+        reason: "app",
+      });
+    });
+
+    it("rejects oversized bodies before buffering them", async () => {
+      const app = createTestServer([slackProvider], {
+        eventVerifyToken: "verify-token",
+      }).createApp();
+      await configure(app);
+      const response = await verifyRequest(app, "{}", {
+        "content-length": String(1024 * 1024),
+      });
+      expect(response.status).toBe(401);
+    });
+  });
+
+  it.each([401, 403, 502, 504])("preserves Marketplace error status %s", async (status) => {
+    const database = new SqliteRuntimeDatabase(":memory:");
+    requestDatabases.push(database);
+    const marketplace = new MarketplaceService({
+      catalog: createCatalogStore([apiKeyProvider]),
+      store: database.marketplaceStore,
+      secretCodec: new PlainTextSecretCodec(),
+    });
+    vi.spyOn(marketplace, "configure").mockRejectedValue(
+      new MarketplaceError("marketplace_unavailable", "Marketplace request failed.", status),
+    );
+    const app = createTestServer([apiKeyProvider], {
+      marketplace,
+    }).createApp();
+    const response = await app.request("/api/marketplace", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "secret" }),
+    });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "marketplace_unavailable",
+        message: "Marketplace request failed.",
+      },
+    });
+  });
+
   it.each([401, 403, 502, 504])("preserves Marketplace error status %s", async (status) => {
     const database = new SqliteRuntimeDatabase(":memory:");
     requestDatabases.push(database);
@@ -3953,6 +4146,7 @@ interface CreateTestServerOptions {
   secretCodec?: ISecretCodec;
   allowedCustomOAuth?: string[];
   oauthCloseDelaySeconds?: number;
+  eventVerifyToken?: string;
 }
 
 function createTestServer(providers: ProviderDefinition[], options: CreateTestServerOptions = {}): ConnectServer {
@@ -4032,6 +4226,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     actionSearch: options.actionSearch,
     logger: options.logger,
     oauthCloseDelaySeconds: options.oauthCloseDelaySeconds,
+    eventVerifyToken: options.eventVerifyToken,
   });
 }
 

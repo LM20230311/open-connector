@@ -26,6 +26,7 @@ import { createActionSearchIndexProvider } from "../core/action-search.ts";
 import { optionalRecord } from "../core/cast.ts";
 import { withProviderHttpDispatch } from "../core/provider-http-dispatch.ts";
 import { ProviderDispatchRequestError, toProviderExecutionError } from "../providers/provider-runtime.ts";
+import { slackEventMaximumBodyBytes, verifySlackEventRequest } from "../providers/slackbot/event-verification.ts";
 import { SaasError } from "../saas/saas-client.ts";
 import { ActionRunner } from "./actions/action-runner.ts";
 import { clearLocalAuthCookie, createLocalAuthMiddleware, readLocalAuthSession } from "./api/auth.ts";
@@ -79,6 +80,8 @@ export interface IConnectServerOptions {
   transitFiles: ITransitFileService;
   uploadTransitFile?: (request: Request) => Promise<TransitFileUpload>;
   auth?: LocalAuthOptions;
+  /** Dedicated token for inbound provider event verification. */
+  eventVerifyToken?: string;
   actionPolicy?: ActionPolicyService;
   runtimePolicyStore: IRuntimePolicyStore;
   actionSearch?: ActionSearchIndexProvider;
@@ -155,6 +158,34 @@ export class ConnectServer {
       app.use("/api/*", compress());
     }
     app.use("*", createLocalAuthMiddleware(auth));
+
+    // Inbound provider event verification. This route authenticates with a dedicated token
+    // so a host ingress can delegate signature verification without receiving the admin token.
+    app.post("/v1/providers/slackbot/events/verify", async (context) => {
+      const expected = this.options.eventVerifyToken?.trim();
+      if (!expected) return context.json({ error: "event_verification_disabled" }, 404);
+      const authorization = context.req.header("authorization") ?? "";
+      const provided = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+      if (!(await sameSecret(provided, expected))) return context.json({ error: "unauthorized" }, 401);
+      // Reject oversized bodies before buffering them.
+      const declaredLength = Number(context.req.header("content-length") ?? "0");
+      if (Number.isFinite(declaredLength) && declaredLength > slackEventMaximumBodyBytes) {
+        return context.json({ error: "invalid_request", reason: "body_too_large" }, 401);
+      }
+      const config = await this.options.oauthClientConfigs.getConfig("slackbot");
+      const appId = String(config?.extra?.appId ?? "").trim();
+      const signingSecret = String(config?.secretExtra?.signingSecret ?? "").trim();
+      if (!appId || !signingSecret) return context.json({ error: "event_verification_not_configured" }, 404);
+      const result = await verifySlackEventRequest({
+        timestamp: context.req.header("x-slack-request-timestamp") ?? "",
+        signature: context.req.header("x-slack-signature") ?? "",
+        rawBody: await context.req.text(),
+        configuredAppId: appId,
+        signingSecret,
+      });
+      if (!result.valid) return context.json({ error: "invalid_request", reason: result.reason }, 401);
+      return context.json(result);
+    });
 
     // Health and runtime discovery / execution endpoints
     app.get("/v1/health", (context) => writeRuntimeSuccess(context, { ok: true, runtime: "oomol-connect" }));
@@ -256,7 +287,13 @@ export class ConnectServer {
       app.route("/api", createSaasProjectRoutes({ saasProject: saas }));
     }
     if (saas && this.options.saasOAuth) {
-      app.route("/", createSaasOAuthRoutes({ saasProject: saas, saasOAuth: this.options.saasOAuth }));
+      app.route(
+        "/",
+        createSaasOAuthRoutes({
+          saasProject: saas,
+          saasOAuth: this.options.saasOAuth,
+        }),
+      );
     }
     app.route(
       "/",
@@ -300,9 +337,19 @@ export class ConnectServer {
         );
         if (error.retryAfter) context.header("Retry-After", error.retryAfter);
         if (context.req.path.startsWith("/v1/"))
-          return writeRuntimeFailure(context, { status: error.status, errorCode: error.code, message: error.message });
+          return writeRuntimeFailure(context, {
+            status: error.status,
+            errorCode: error.code,
+            message: error.message,
+          });
         return context.json(
-          { error: { code: error.code, message: error.message, reason: error.reason } },
+          {
+            error: {
+              code: error.code,
+              message: error.message,
+              reason: error.reason,
+            },
+          },
           error.status,
         );
       }
@@ -336,4 +383,19 @@ export class ConnectServer {
 
     return app;
   }
+}
+
+/** Hash both values before a constant-time comparison so length never leaks. */
+async function sameSecret(provided: string, expected: string): Promise<boolean> {
+  if (!provided || !expected) return false;
+  const encoder = new TextEncoder();
+  const [left, right] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  const a = new Uint8Array(left);
+  const b = new Uint8Array(right);
+  let difference = 0;
+  for (let index = 0; index < a.length; index += 1) difference |= a[index]! ^ b[index]!;
+  return difference === 0;
 }
