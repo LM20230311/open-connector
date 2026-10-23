@@ -405,7 +405,12 @@ export function createOpenApiDocument(
         ],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", additionalProperties: true } } },
+          content: {
+            "application/json": { schema: { type: "object", additionalProperties: true } },
+            "application/x-www-form-urlencoded": {
+              schema: { type: "string", description: "Slack interaction callback form body." },
+            },
+          },
         },
         responses: {
           200: jsonResponse(
