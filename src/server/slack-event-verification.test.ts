@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { verifySlackEventRequest } from "./event-verification.ts";
+import { verifySlackEventRequest } from "./slack-event-verification.ts";
 
 const secret = "fixture-signing-secret";
 const timestamp = "1700000000";
@@ -22,7 +22,7 @@ async function verify(body: string, overrides: Partial<Parameters<typeof verifyS
   return verifySlackEventRequest({
     timestamp,
     signature: await signatureFor(body),
-    rawBody: body,
+    rawBody: new TextEncoder().encode(body),
     configuredAppId: "A0C8QRPSZ7Z",
     signingSecret: secret,
     now,

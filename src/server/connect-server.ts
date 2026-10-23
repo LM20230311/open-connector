@@ -26,7 +26,6 @@ import { createActionSearchIndexProvider } from "../core/action-search.ts";
 import { optionalRecord } from "../core/cast.ts";
 import { withProviderHttpDispatch } from "../core/provider-http-dispatch.ts";
 import { ProviderDispatchRequestError, toProviderExecutionError } from "../providers/provider-runtime.ts";
-import { slackEventMaximumBodyBytes, verifySlackEventRequest } from "../providers/slackbot/event-verification.ts";
 import { SaasError } from "../saas/saas-client.ts";
 import { ActionRunner } from "./actions/action-runner.ts";
 import { clearLocalAuthCookie, createLocalAuthMiddleware, readLocalAuthSession } from "./api/auth.ts";
@@ -50,6 +49,7 @@ import { createSaasProjectRoutes } from "./api/saas-project-routes.ts";
 import { createTransitFileRoutes } from "./api/transit-file-routes.ts";
 import { createTriggerRoutes } from "./api/trigger-routes.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
+import { readSlackEventRequestBody, verifySlackEventRequest } from "./slack-event-verification.ts";
 
 /**
  * Import and evaluate the modules the /mcp and /docs routes defer to their first request. The Node server never
@@ -167,23 +167,23 @@ export class ConnectServer {
       const authorization = context.req.header("authorization") ?? "";
       const provided = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
       if (!(await sameSecret(provided, expected))) return context.json({ error: "unauthorized" }, 401);
-      // Reject oversized bodies before buffering them.
-      const declaredLength = Number(context.req.header("content-length") ?? "0");
-      if (Number.isFinite(declaredLength) && declaredLength > slackEventMaximumBodyBytes) {
-        return context.json({ error: "invalid_request", reason: "body_too_large" }, 401);
-      }
       const config = await this.options.oauthClientConfigs.getConfig("slackbot");
       const appId = String(config?.extra?.appId ?? "").trim();
       const signingSecret = String(config?.secretExtra?.signingSecret ?? "").trim();
       if (!appId || !signingSecret) return context.json({ error: "event_verification_not_configured" }, 404);
+      const rawBody = await readSlackEventRequestBody(context.req.raw);
+      if (!rawBody) return context.json({ error: "invalid_request", reason: "body_too_large" }, 413);
       const result = await verifySlackEventRequest({
         timestamp: context.req.header("x-slack-request-timestamp") ?? "",
         signature: context.req.header("x-slack-signature") ?? "",
-        rawBody: await context.req.text(),
+        rawBody,
         configuredAppId: appId,
         signingSecret,
       });
-      if (!result.valid) return context.json({ error: "invalid_request", reason: result.reason }, 401);
+      if (!result.valid) {
+        const status = result.reason === "body_too_large" ? 413 : result.reason === "payload" ? 400 : 401;
+        return context.json({ error: "invalid_request", reason: result.reason }, status);
+      }
       return context.json(result);
     });
 

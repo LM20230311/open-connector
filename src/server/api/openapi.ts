@@ -59,6 +59,36 @@ const errorResponseSchema = jsonSchema.object(
   },
 );
 
+const slackEventVerificationRejectedSchema = jsonSchema.object(
+  {
+    error: jsonSchema.stringEnum("Verification error category.", ["invalid_request", "unauthorized"]),
+    reason: jsonSchema.stringEnum("Machine-readable verification failure reason.", [
+      "signature",
+      "timestamp",
+      "payload",
+      "app",
+      "body_too_large",
+    ]),
+  },
+  {
+    required: ["error"],
+    description: "A Slack event was rejected before it could be processed.",
+  },
+);
+
+const slackEventVerificationUnavailableSchema = jsonSchema.object(
+  {
+    error: jsonSchema.stringEnum("Verification availability error.", [
+      "event_verification_disabled",
+      "event_verification_not_configured",
+    ]),
+  },
+  {
+    required: ["error"],
+    description: "Slack event verification is unavailable in this deployment.",
+  },
+);
+
 const actionResultMetaSchema = jsonSchema.object(
   {
     executionId: jsonSchema.string({ description: "Local action execution identifier." }),
@@ -414,10 +444,16 @@ export function createOpenApiDocument(
             },
             required: ["valid", "appId", "challenge"],
           }),
-          400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
-          401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
-          404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
-          413: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+          400: jsonResponse(slackEventVerificationRejectedSchema, "The signed request body is not valid JSON."),
+          401: jsonResponse(
+            slackEventVerificationRejectedSchema,
+            "The bearer token is missing or invalid, or the Slack request failed verification.",
+          ),
+          404: jsonResponse(
+            slackEventVerificationUnavailableSchema,
+            "Verification is disabled, or the Slack App ID and Signing Secret are not configured.",
+          ),
+          413: jsonResponse(slackEventVerificationRejectedSchema, "The Slack request body exceeds 64 KiB."),
         },
       },
     },

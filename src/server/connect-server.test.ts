@@ -271,6 +271,19 @@ describe("ConnectServer", () => {
       });
     });
 
+    it("returns a client error for a signed but malformed payload", async () => {
+      const app = createTestServer([slackProvider], {
+        eventVerifyToken: "verify-token",
+      }).createApp();
+      await configure(app);
+      const response = await verifyRequest(app, "{");
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "invalid_request",
+        reason: "payload",
+      });
+    });
+
     it("rejects a forged signature and a foreign app id", async () => {
       const app = createTestServer([slackProvider], {
         eventVerifyToken: "verify-token",
@@ -295,15 +308,40 @@ describe("ConnectServer", () => {
       });
     });
 
-    it("rejects oversized bodies before buffering them", async () => {
+    it("rejects requests that declare an oversized body", async () => {
       const app = createTestServer([slackProvider], {
         eventVerifyToken: "verify-token",
       }).createApp();
       await configure(app);
       const response = await verifyRequest(app, "{}", {
-        "content-length": String(1024 * 1024),
+        "content-length": String(64 * 1024 + 1),
       });
-      expect(response.status).toBe(401);
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        error: "invalid_request",
+        reason: "body_too_large",
+      });
+    });
+
+    it("rejects an oversized streamed body without content-length", async () => {
+      const app = createTestServer([slackProvider], {
+        eventVerifyToken: "verify-token",
+      }).createApp();
+      await configure(app);
+      const request = new Request("http://localhost:3000/v1/providers/slackbot/events/verify", {
+        method: "POST",
+        headers: { authorization: "Bearer verify-token" },
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(64 * 1024 + 1));
+            controller.close();
+          },
+        }),
+        duplex: "half",
+      } as RequestInit & { duplex: "half" });
+      expect(request.headers.has("content-length")).toBe(false);
+      const response = await app.request(request);
+      expect(response.status).toBe(413);
     });
   });
 
