@@ -440,7 +440,7 @@ export function createOpenApiDocument(
             properties: {
               valid: { type: "boolean" },
               appId: { type: "string" },
-              challenge: { type: "string", nullable: true },
+              challenge: jsonSchema.nullableString("Challenge value returned for Slack URL verification."),
             },
             required: ["valid", "appId", "challenge"],
           }),
