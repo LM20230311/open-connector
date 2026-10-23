@@ -70,6 +70,42 @@ describe("Slack inbound event verification", () => {
     });
   });
 
+  it.each([-300001, -300000, 300000, 300001])("enforces both timestamp boundaries at %s ms", async (offset) => {
+    const body = JSON.stringify({ type: "event_callback", api_app_id: "A0C8QRPSZ7Z" });
+    const result = await verify(body, { now: now + offset });
+    expect(result.valid).toBe(Math.abs(offset) <= 300000);
+    if (!result.valid) expect(result.reason).toBe("timestamp");
+  });
+
+  it.each([
+    {},
+    { api_app_id: "A0C8QRPSZ7Z" },
+    { type: "unsupported", api_app_id: "A0C8QRPSZ7Z" },
+    { type: "url_verification" },
+    { type: "url_verification", challenge: "" },
+    { type: "url_verification", challenge: 1 },
+    { type: "url_verification", challenge: "x".repeat(1025) },
+  ])("rejects an invalid signed envelope %#", async (payload) => {
+    await expect(verify(JSON.stringify(payload))).resolves.toEqual({ valid: false, reason: "payload" });
+  });
+
+  it("checks an explicit app ID on challenges", async () => {
+    await expect(
+      verify(JSON.stringify({ type: "url_verification", challenge: "hello", api_app_id: "OTHER" })),
+    ).resolves.toEqual({ valid: false, reason: "app" });
+    await expect(
+      verify(JSON.stringify({ type: "url_verification", challenge: "hello", api_app_id: "A0C8QRPSZ7Z" })),
+    ).resolves.toMatchObject({ valid: true, challenge: "hello" });
+  });
+
+  it("checks the signature before parsing JSON", async () => {
+    await expect(verify("{", { signature: `v0=${"0".repeat(64)}` })).resolves.toEqual({
+      valid: false,
+      reason: "signature",
+    });
+    await expect(verify("{")).resolves.toEqual({ valid: false, reason: "payload" });
+  });
+
   it("rejects oversized bodies", async () => {
     await expect(verify("x".repeat(64 * 1024 + 1))).resolves.toEqual({
       valid: false,

@@ -163,16 +163,36 @@ export class ConnectServer {
     // so a host ingress can delegate signature verification without receiving the admin token.
     app.post("/v1/providers/slackbot/events/verify", async (context) => {
       const expected = this.options.eventVerifyToken?.trim();
-      if (!expected) return context.json({ error: "event_verification_disabled" }, 404);
+      if (!expected)
+        return writeRuntimeFailure(context, {
+          status: 404,
+          errorCode: "event_verification_disabled",
+          message: "Event verification is disabled.",
+        });
       const authorization = context.req.header("authorization") ?? "";
       const provided = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
-      if (!(await sameSecret(provided, expected))) return context.json({ error: "unauthorized" }, 401);
+      if (!(await sameSecret(provided, expected)))
+        return writeRuntimeFailure(context, {
+          status: 401,
+          errorCode: "unauthorized",
+          message: "A valid event verification token is required.",
+        });
       const config = await this.options.oauthClientConfigs.getConfig("slackbot");
       const appId = String(config?.extra?.appId ?? "").trim();
       const signingSecret = String(config?.secretExtra?.signingSecret ?? "").trim();
-      if (!appId || !signingSecret) return context.json({ error: "event_verification_not_configured" }, 404);
+      if (!appId || !signingSecret)
+        return writeRuntimeFailure(context, {
+          status: 409,
+          errorCode: "event_verification_not_configured",
+          message: "Configure the default Slack App ID and Signing Secret.",
+        });
       const rawBody = await readSlackEventRequestBody(context.req.raw);
-      if (!rawBody) return context.json({ error: "invalid_request", reason: "body_too_large" }, 413);
+      if (!rawBody)
+        return writeRuntimeFailure(context, {
+          status: 413,
+          errorCode: "webhook_request_too_large",
+          message: "Slack request body exceeds 64 KiB.",
+        });
       const result = await verifySlackEventRequest({
         timestamp: context.req.header("x-slack-request-timestamp") ?? "",
         signature: context.req.header("x-slack-signature") ?? "",
@@ -181,10 +201,40 @@ export class ConnectServer {
         signingSecret,
       });
       if (!result.valid) {
-        const status = result.reason === "body_too_large" ? 413 : result.reason === "payload" ? 400 : 401;
-        return context.json({ error: "invalid_request", reason: result.reason }, status);
+        switch (result.reason) {
+          case "body_too_large":
+            return writeRuntimeFailure(context, {
+              status: 413,
+              errorCode: "webhook_request_too_large",
+              message: "Slack request body exceeds 64 KiB.",
+            });
+          case "payload":
+            return writeRuntimeFailure(context, {
+              status: 400,
+              errorCode: "invalid_event_payload",
+              message: "Invalid Slack event envelope.",
+            });
+          case "app":
+            return writeRuntimeFailure(context, {
+              status: 403,
+              errorCode: "webhook_app_mismatch",
+              message: "Slack App ID does not match the configured application.",
+            });
+          case "timestamp":
+            return writeRuntimeFailure(context, {
+              status: 401,
+              errorCode: "invalid_webhook_timestamp",
+              message: "Invalid or expired Slack request timestamp.",
+            });
+          case "signature":
+            return writeRuntimeFailure(context, {
+              status: 401,
+              errorCode: "invalid_webhook_signature",
+              message: "Invalid Slack request signature.",
+            });
+        }
       }
-      return context.json(result);
+      return writeRuntimeSuccess(context, result);
     });
 
     // Health and runtime discovery / execution endpoints

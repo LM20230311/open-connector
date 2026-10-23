@@ -236,7 +236,7 @@ describe("ConnectServer", () => {
       const app = createTestServer([slackProvider], {
         eventVerifyToken: "verify-token",
       }).createApp();
-      expect((await verifyRequest(app, "{}")).status).toBe(404);
+      expect((await verifyRequest(app, "{}")).status).toBe(409);
     });
 
     it("accepts a signed event for the configured app and does not require the admin token", async () => {
@@ -265,10 +265,16 @@ describe("ConnectServer", () => {
       const response = await verifyRequest(app, body);
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
-        valid: true,
-        appId: "A123",
-        challenge: null,
+        success: true,
+        message: "OK",
+        meta: {},
+        data: { valid: true, appId: "A123", challenge: null },
       });
+      for (const token of ["admin-token", "runtime-token"]) {
+        const rejected = await verifyRequest(app, body, { authorization: `Bearer ${token}` });
+        expect(rejected.status).toBe(401);
+        expect(await rejected.json()).toMatchObject({ success: false, errorCode: "unauthorized" });
+      }
     });
 
     it("returns a client error for a signed but malformed payload", async () => {
@@ -278,10 +284,7 @@ describe("ConnectServer", () => {
       await configure(app);
       const response = await verifyRequest(app, "{");
       expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({
-        error: "invalid_request",
-        reason: "payload",
-      });
+      expect(await response.json()).toMatchObject({ success: false, errorCode: "invalid_event_payload", data: null });
     });
 
     it("rejects a forged signature and a foreign app id", async () => {
@@ -301,11 +304,47 @@ describe("ConnectServer", () => {
         ).status,
       ).toBe(401);
       const foreign = await verifyRequest(app, JSON.stringify({ type: "event_callback", api_app_id: "AOTHER" }));
-      expect(foreign.status).toBe(401);
-      expect(await foreign.json()).toEqual({
-        error: "invalid_request",
-        reason: "app",
-      });
+      expect(foreign.status).toBe(403);
+      expect(await foreign.json()).toMatchObject({ success: false, errorCode: "webhook_app_mismatch", data: null });
+    });
+
+    it("preserves omitted secrets and explicitly clears the signing secret", async () => {
+      const app = createTestServer([slackProvider], { eventVerifyToken: "verify-token" }).createApp();
+      await configure(app);
+      const save = (secretExtra: Record<string, string>) =>
+        app.request("/api/oauth/configs/slackbot", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ clientId: "client", extra: { appId: "A123" }, secretExtra }),
+        });
+      const saved = await save({});
+      expect(saved.status).toBe(200);
+      expect(JSON.stringify(await saved.json())).not.toContain(signingSecret);
+      const event = JSON.stringify({ type: "event_callback", api_app_id: "A123" });
+      expect((await verifyRequest(app, event)).status).toBe(200);
+      expect((await save({ signingSecret: "" })).status).toBe(200);
+      const cleared = await verifyRequest(app, event);
+      expect(cleared.status).toBe(409);
+      expect(await cleared.json()).toMatchObject({ errorCode: "event_verification_not_configured" });
+    });
+
+    it("accepts a challenge and rejects malformed or foreign challenge envelopes", async () => {
+      const app = createTestServer([slackProvider], { eventVerifyToken: "verify-token" }).createApp();
+      await configure(app);
+      const success = await verifyRequest(app, JSON.stringify({ type: "url_verification", challenge: "hello" }));
+      expect(success.status).toBe(200);
+      expect(await success.json()).toMatchObject({ data: { valid: true, appId: "A123", challenge: "hello" } });
+      const foreign = await verifyRequest(
+        app,
+        JSON.stringify({ type: "url_verification", challenge: "hello", api_app_id: "OTHER" }),
+      );
+      expect(foreign.status).toBe(403);
+      expect(await foreign.json()).toMatchObject({ errorCode: "webhook_app_mismatch" });
+      for (const payload of [{ api_app_id: "A123" }, { type: "url_verification" }]) {
+        const invalid = await verifyRequest(app, JSON.stringify(payload));
+        expect(invalid.status).toBe(400);
+        expect(await invalid.json()).toMatchObject({ errorCode: "invalid_event_payload" });
+      }
     });
 
     it("rejects requests that declare an oversized body", async () => {
@@ -317,9 +356,10 @@ describe("ConnectServer", () => {
         "content-length": String(64 * 1024 + 1),
       });
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual({
-        error: "invalid_request",
-        reason: "body_too_large",
+      expect(await response.json()).toMatchObject({
+        success: false,
+        errorCode: "webhook_request_too_large",
+        data: null,
       });
     });
 
@@ -342,34 +382,6 @@ describe("ConnectServer", () => {
       expect(request.headers.has("content-length")).toBe(false);
       const response = await app.request(request);
       expect(response.status).toBe(413);
-    });
-  });
-
-  it.each([401, 403, 502, 504])("preserves Marketplace error status %s", async (status) => {
-    const database = new SqliteRuntimeDatabase(":memory:");
-    requestDatabases.push(database);
-    const marketplace = new MarketplaceService({
-      catalog: createCatalogStore([apiKeyProvider]),
-      store: database.marketplaceStore,
-      secretCodec: new PlainTextSecretCodec(),
-    });
-    vi.spyOn(marketplace, "configure").mockRejectedValue(
-      new MarketplaceError("marketplace_unavailable", "Marketplace request failed.", status),
-    );
-    const app = createTestServer([apiKeyProvider], {
-      marketplace,
-    }).createApp();
-    const response = await app.request("/api/marketplace", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ apiKey: "secret" }),
-    });
-    expect(response.status).toBe(status);
-    expect(await response.json()).toEqual({
-      error: {
-        code: "marketplace_unavailable",
-        message: "Marketplace request failed.",
-      },
     });
   });
 

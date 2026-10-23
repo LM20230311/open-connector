@@ -32,7 +32,8 @@ export const provider: ProviderDefinition = {
           inputType: "text",
           required: false,
           secret: false,
-          description: "The Slack App ID (A...) used to match inbound events to this application.",
+          description:
+            "Optional for event verification. Configure the deployment-default Slack App ID (A...); connection-specific values are not used by the verification endpoint.",
         },
         {
           key: "signingSecret",
@@ -41,7 +42,8 @@ export const provider: ProviderDefinition = {
           required: false,
           secret: true,
           location: "secretExtra",
-          description: "The Slack Signing Secret used to verify inbound Events API requests.",
+          description:
+            "Optional for event verification, not OAuth authorization. The verification endpoint uses this secret from the deployment-default app configuration, not individual connections.",
         },
       ],
     },
