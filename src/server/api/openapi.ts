@@ -423,6 +423,13 @@ export function createOpenApiDocument(
           "Requires the dedicated OOMOL_CONNECT_EVENT_VERIFY_TOKEN. The raw Slack request body is verified against the slackbot OAuth client configuration; no event is stored or scheduled.",
         parameters: [
           {
+            name: "authorization",
+            in: "header",
+            required: true,
+            description: "Bearer token configured through OOMOL_CONNECT_EVENT_VERIFY_TOKEN.",
+            schema: jsonSchema.string(),
+          },
+          {
             name: "x-slack-request-timestamp",
             in: "header",
             required: true,
