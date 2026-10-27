@@ -1,6 +1,7 @@
 import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
 import type { OAuthProviderContext, ProviderActionHandlers } from "../provider-executors.ts";
 
+import { decodeJwt } from "jose";
 import { looseArray, optionalNumber, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import { compactJson, encodePathSegment } from "../../core/request.ts";
 import { microsoftGraphJson } from "../outlook/microsoft-graph.ts";
@@ -85,12 +86,24 @@ export const credentialValidators: CredentialValidators = {
 };
 
 async function getCurrentUser(context: OAuthProviderContext): Promise<unknown> {
-  return microsoftGraphJson(
+  const profile = await microsoftGraphJson<Record<string, unknown>>(
     "me",
     requestOptions(context, "get current user", {
       $select: "id,displayName,mail,userPrincipalName",
     }),
   );
+  const tenantId = tokenTenantId(context.accessToken);
+  return tenantId === undefined ? profile : { ...profile, tenantId };
+}
+
+/** Reads the tenant claim from the access token already resolved by the OAuth runtime. */
+function tokenTenantId(accessToken: string): string | undefined {
+  try {
+    const value = decodeJwt(accessToken).tid;
+    return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function listJoinedTeams(input: Record<string, unknown>, context: OAuthProviderContext): Promise<unknown> {

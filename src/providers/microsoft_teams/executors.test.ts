@@ -55,6 +55,19 @@ describe("Microsoft Teams execution", () => {
     });
   });
 
+  it("returns the tenant claim from the resolved OAuth access token", async () => {
+    const token = [
+      Buffer.from('{"alg":"none"}').toString("base64url"),
+      Buffer.from('{"tid":"tenant-from-token"}').toString("base64url"),
+      "",
+    ].join(".");
+    vi.stubGlobal("fetch", async () => Response.json({ id: "user-1", displayName: "Fixture User" }));
+
+    const result = await execute("get_current_user", {}, token);
+
+    expect(result).toMatchObject({ ok: true, output: { id: "user-1", tenantId: "tenant-from-token" } });
+  });
+
   it("sends structured chat messages to an existing chat", async () => {
     let request: Request | undefined;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -74,11 +87,11 @@ describe("Microsoft Teams execution", () => {
   });
 });
 
-async function execute(actionName: string, input: Record<string, unknown>) {
+async function execute(actionName: string, input: Record<string, unknown>, accessToken = credential.accessToken) {
   const context: ExecutionContext = {
     async getCredential(service) {
       expect(service).toBe("microsoft_teams");
-      return credential;
+      return { ...credential, accessToken };
     },
   };
   return executeAction(

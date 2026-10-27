@@ -37,6 +37,7 @@ const user = s.looseObject(
     displayName: s.string("Account display name."),
     mail: s.nullableString("Primary email address."),
     userPrincipalName: s.string("User principal name."),
+    tenantId: s.nullableString("Microsoft Entra tenant ID from the OAuth access token."),
   },
   { description: "Current Microsoft account profile." },
 );
