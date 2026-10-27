@@ -310,7 +310,14 @@ describe("Teams verification contract", () => {
           string,
           {
             content: {
-              "application/json": { schema: { properties: Record<string, { properties?: Record<string, unknown> }> } };
+              "application/json": {
+                schema: {
+                  properties: Record<
+                    string,
+                    { required?: string[]; properties?: Record<string, { anyOf?: Array<Record<string, unknown>> }> }
+                  >;
+                };
+              };
             };
           }
         >;
@@ -318,13 +325,20 @@ describe("Teams verification contract", () => {
     };
     const data = route.post.responses["200"]!.content["application/json"].schema.properties.data!;
     expect(route.post.description).toMatch(/Bot Connector/i);
-    expect(data.properties).toEqual(
-      expect.objectContaining({
-        tenantId: expect.anything(),
-        activityId: expect.anything(),
-        conversationId: expect.anything(),
-        aadObjectId: expect.anything(),
-      }),
-    );
+    expect(data.required).toEqual([
+      "valid",
+      "appId",
+      "tenantId",
+      "serviceUrl",
+      "activityId",
+      "conversationId",
+      "aadObjectId",
+      "channelId",
+    ]);
+    for (const field of ["tenantId", "activityId", "conversationId", "aadObjectId"]) {
+      expect(data.properties![field]).toMatchObject({
+        anyOf: [{ type: "string" }, { type: "null" }],
+      });
+    }
   });
 });

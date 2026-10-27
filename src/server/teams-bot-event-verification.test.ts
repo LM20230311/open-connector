@@ -96,6 +96,9 @@ describe("Teams bot inbound activity verification", () => {
   });
 
   it.each([
+    "https://user@smba.trafficmanager.net/teams/",
+    "https://:password@smba.trafficmanager.net/teams/",
+    "https://smba.trafficmanager.net/teams/#fragment",
     "https://attacker.example/teams/",
     "https://smba.trafficmanager.net.evil.example/teams/",
     "http://smba.trafficmanager.net/teams/",
