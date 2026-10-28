@@ -78,6 +78,7 @@ export async function verifyFeishuEventRequest(
     };
   }
 
+  if (signature !== "verified") return { valid: false, reason: "signature" };
   if (decrypted.schema != "2.0") return { valid: false, reason: "payload" };
   const header = isJsonObject(decrypted.header) ? decrypted.header : undefined;
   if (!header || !sameSecret(optionalString(header.token) ?? "", input.verificationToken))
@@ -90,12 +91,13 @@ export async function verifyFeishuEventRequest(
   const eventId = optionalString(header.event_id);
   if (!eventType || !eventId || !isJsonObject(decrypted.event)) return { valid: false, reason: "payload" };
 
-  const { token: _token, ...payload } = decrypted;
+  const { token: _token, header: _header, ...payload } = decrypted;
+  const { token: _headerToken, ...safeHeader } = header;
   return {
     valid: true,
     appId,
     tenantKey,
-    payload,
+    payload: { ...payload, header: safeHeader },
     signatureVerified: signature === "verified",
   };
 }

@@ -79,13 +79,12 @@ describe("Feishu inbound event verification", () => {
 
     const result = await verify(body);
 
-    expect(result).toMatchObject({
-      valid: true,
-      appId,
-      tenantKey: "tenant-1",
-      signatureVerified: true,
-      payload: { schema: "2.0" },
-    });
+    expect(result.valid).toBe(true);
+    if (!result.valid) throw new Error("expected a valid Feishu event");
+    expect(result).toMatchObject({ appId, tenantKey: "tenant-1", signatureVerified: true });
+    expect(result.payload).toMatchObject({ schema: "2.0" });
+    expect(result.payload?.header).not.toHaveProperty("token");
+    expect(JSON.stringify(result)).not.toContain(verificationToken);
   });
 
   it("decrypts and accepts a URL verification challenge", async () => {
@@ -125,6 +124,13 @@ describe("Feishu inbound event verification", () => {
 
   it("rejects an invalid signature", async () => {
     await expect(verify(eventEnvelope(), { signature: "00" })).resolves.toEqual({
+      valid: false,
+      reason: "signature",
+    });
+  });
+
+  it("rejects an unsigned regular event while allowing unsigned URL verification", async () => {
+    await expect(verify(eventEnvelope(), { timestamp: "", nonce: "", signature: "" })).resolves.toEqual({
       valid: false,
       reason: "signature",
     });

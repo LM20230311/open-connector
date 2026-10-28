@@ -537,7 +537,7 @@ export function createOpenApiDocument(options: OpenApiDocumentOptions = {}): Ope
         tags: ["Triggers"],
         summary: "Verify and decrypt an inbound Feishu event.",
         description:
-          "Requires the dedicated OOMOL_CONNECT_EVENT_VERIFY_TOKEN in Authorization. The selected feishu_app_bot connection must contain appId, verificationToken and encryptKey. The route validates the Feishu token, signature when signing headers are present, decrypts encrypted envelopes, and returns the trusted decrypted payload. No event is stored or scheduled.",
+          "Requires the dedicated OOMOL_CONNECT_EVENT_VERIFY_TOKEN in Authorization. The selected feishu_app_bot connection must contain appId, verificationToken and encryptKey. The route validates the Feishu token and required signature, decrypts encrypted envelopes, and returns the trusted decrypted payload. Only URL verification challenges may omit signing headers. No event is stored or scheduled.",
         security: [{ eventVerificationToken: [] }],
         parameters: namedConnectionParameters,
         requestBody: {
