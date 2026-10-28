@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { verifyFeishuEventRequest } from "./feishu-event-verification.ts";
+import { verifyFeishuEventRequest } from "./feishu-app-bot.ts";
 
 const appId = "cli_fixture";
 const verificationToken = "fixture-verification-token";
