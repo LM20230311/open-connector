@@ -537,9 +537,14 @@ export function createOpenApiDocument(options: OpenApiDocumentOptions = {}): Ope
         tags: ["Triggers"],
         summary: "Verify and decrypt an inbound Feishu event.",
         description:
-          "Requires the dedicated OOMOL_CONNECT_EVENT_VERIFY_TOKEN in Authorization. The selected feishu_app_bot connection must contain appId, verificationToken and encryptKey. The route validates the Feishu token and required signature, decrypts encrypted envelopes, and returns the trusted decrypted payload. Only URL verification challenges may omit signing headers. No event is stored or scheduled.",
+          "Requires the dedicated OOMOL_CONNECT_EVENT_VERIFY_TOKEN in Authorization. The selected feishu_app_bot connection must contain appId, verificationToken and encryptKey. Signed callers must forward the exact original request bytes; re-serializing the JSON body changes the signed content and fails verification. The route validates the Feishu token and required signature, decrypts encrypted envelopes, and returns the trusted decrypted payload. Only URL verification challenges may omit signing headers. No event is stored or scheduled.",
         security: [{ eventVerificationToken: [] }],
-        parameters: namedConnectionParameters,
+        parameters: [
+          { name: "x-lark-request-timestamp", in: "header", required: false, schema: jsonSchema.string() },
+          { name: "x-lark-request-nonce", in: "header", required: false, schema: jsonSchema.string() },
+          { name: "x-lark-signature", in: "header", required: false, schema: jsonSchema.string() },
+          ...namedConnectionParameters,
+        ],
         requestBody: {
           required: true,
           content: { "application/json": { schema: { type: "object", additionalProperties: true } } },

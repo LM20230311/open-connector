@@ -348,6 +348,8 @@ describe("Feishu verification contract", () => {
     const document = createOpenApiDocument();
     const route = document.paths["/v1/providers/feishu_app_bot/events/verify"] as {
       post: {
+        description: string;
+        parameters: Array<{ name: string; in: string; required?: boolean }>;
         security: unknown;
         responses: Record<
           string,
@@ -362,6 +364,14 @@ describe("Feishu verification contract", () => {
       };
     };
     expect(route.post.security).toEqual([{ eventVerificationToken: [] }]);
+    expect(route.post.description).toMatch(/exact original request bytes/i);
+    expect(route.post.parameters).toEqual(
+      expect.arrayContaining([
+        { name: "x-lark-request-timestamp", in: "header", required: false, schema: expect.anything() },
+        { name: "x-lark-request-nonce", in: "header", required: false, schema: expect.anything() },
+        { name: "x-lark-signature", in: "header", required: false, schema: expect.anything() },
+      ]),
+    );
     const data = route.post.responses["200"]!.content["application/json"].schema.properties.data!;
     expect(data.required).toEqual(["valid", "appId", "tenantKey", "signatureVerified"]);
   });
