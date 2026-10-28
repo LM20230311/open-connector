@@ -152,8 +152,9 @@ async function decryptIfNeeded(
   envelope: Record<string, JsonValue>,
   encryptKey: string,
 ): Promise<Record<string, JsonValue> | undefined> {
-  const encrypted = optionalString(envelope.encrypt);
-  if (!encrypted) return envelope;
+  // Plaintext mode applies only when `encrypt` is absent; a present but malformed value is rejected.
+  if (!Object.hasOwn(envelope, "encrypt")) return envelope;
+  const encrypted = envelope.encrypt;
   if (!encryptKey || !isFeishuCiphertext(encrypted)) return undefined;
   try {
     return await decryptFeishuEnvelope(encrypted, encryptKey);
