@@ -87,6 +87,41 @@ describe("Feishu inbound event verification", () => {
     expect(JSON.stringify(result)).not.toContain(verificationToken);
   });
 
+  it("verifies the encrypted request bytes and returns the decrypted event without tokens", async () => {
+    const body = { ...eventEnvelope(), token: verificationToken };
+    body.event.message.content = JSON.stringify({ text: "你好，飞书" });
+    const rawBody = await encryptedBody(body);
+    const signature = await signatureFor(rawBody);
+
+    const result = await verify(body, { rawBody, signature });
+
+    expect(result).toEqual({
+      valid: true,
+      appId,
+      tenantKey: "tenant-1",
+      signatureVerified: true,
+      payload: {
+        schema: body.schema,
+        header: {
+          event_id: "evt-1",
+          event_type: "im.message.receive_v1",
+          tenant_key: "tenant-1",
+          app_id: appId,
+        },
+        event: body.event,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(verificationToken);
+
+    const reserialized = new TextEncoder().encode(
+      JSON.stringify(JSON.parse(new TextDecoder().decode(rawBody)), null, 2),
+    );
+    await expect(verify(body, { rawBody: reserialized, signature })).resolves.toEqual({
+      valid: false,
+      reason: "signature",
+    });
+  });
+
   it("decrypts and accepts a URL verification challenge", async () => {
     const rawBody = await encryptedBody({
       type: "url_verification",
