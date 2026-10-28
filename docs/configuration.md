@@ -313,7 +313,7 @@ Persistent runtime tokens need explicit `allowedTriggers` grants for Provider Tr
 `slackbot`, `microsoft_teams_bot` and `feishu_app_bot` expose `POST /v1/providers/{service}/events/verify`. The ingress service that receives a channel's events forwards each original request there, and the route proves that the request came from the configured application. All three routes share these rules:
 
 - Authentication uses only `OOMOL_CONNECT_EVENT_VERIFY_TOKEN`. The routes return 404 when the token is unset, and admin or runtime tokens are rejected.
-- Forward the exact original request bytes. Re-serialized JSON fails signature checks.
+- Forward the original request body and the provider headers. Slack and Feishu sign the body, so forward the exact bytes: re-serialized JSON fails their signature checks. Teams does not sign the body. It needs a valid activity whose `serviceUrl` matches the forwarded Bot Framework token.
 - The body limit is 64 KiB.
 - Verification never stores, deduplicates, retries or schedules an event. Your ingress owns those steps and sends any challenge reply to the platform.
 - Errors use one table of codes, listed in each section below.

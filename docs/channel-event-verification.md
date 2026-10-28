@@ -62,13 +62,13 @@ A Teams token authenticates the sender but does not sign the activity body. Fiel
 
 ## Adding a channel
 
-1. **Credential fields.** Add the verification fields to the provider's `definition.ts`, for example a signing secret or an encrypt key. For connection scope, add them as optional secret fields on the credential. For application scope, add them as `clientConfigFields`. Then run `npm run generate:catalog`.
+1. **Credential fields.** Add the verification fields to the provider's `definition.ts`, for example a signing secret or an encrypt key. For connection scope, add them to the credential fields. Set `required` and `secret` per field: a secret used only for event verification is optional and secret, so ordinary actions keep working without it, while an identifier such as an app ID is not secret and may already be required. For application scope, add them as `clientConfigFields`. Then run `npm run generate:catalog`.
 2. **Protocol primitives.** If the channel also has a Trigger source, put the signature and envelope code where both paths can import it, as `src/triggers/sources/slack-signature.ts` and `feishu-envelope.ts` do. A channel with two separate copies of its protocol will drift. Reuse `src/triggers/signature.ts` (`sameSecret`, `verifyHexHmac`, `verifyBase64Hmac`) instead of writing another comparison or HMAC.
 3. **Verifier.** Create `src/server/event-verification/<service>.ts`. It exports a `ChannelEventVerifier`, which needs:
    - `credentialScope`.
    - `readCredential`, which returns `undefined` unless every field it needs is present.
    - `messages.notConfigured`, which names the fields to configure.
-   - `verify`, which reads the provider headers from `request.headers` and verifies `request.rawBody` byte for byte. It parses the body only after the signature or token checks out, and returns `{ verified: true, result }` or a rejection reason with a provider-worded message.
+   - `verify`, which reads the provider headers from `request.headers` and checks `request.rawBody`. It returns `{ verified: true, result }` or a rejection reason with a provider-worded message. When the protocol authenticates before parsing, parse the body only after the signature or token checks out, as Slack and Teams do. When the protocol puts its proof inside the body, the verifier must parse first. Feishu works this way: a `url_verification` challenge may arrive without signature headers, so the verifier decrypts the envelope to compare its verification token, and requires a valid signature for every other event.
    - A catch for infrastructure failures such as unreachable signing keys, returned as `unavailable`. Unexpected errors must still throw.
 
    Fetch keys or metadata with `createGuardedFetch` from `src/core/guarded-fetch.ts`, never the global `fetch`. Load heavy dependencies with a dynamic `import()`.
@@ -76,7 +76,7 @@ A Teams token authenticates the sender but does not sign the activity body. Fiel
 4. **Register.** Add one lazy entry to `src/server/event-verification/registry.ts`. The route and the auth exemption follow from that entry. Do not edit `auth.ts` or the route file.
 5. **Document.** Add `/v1/providers/<service>/events/verify` to `src/server/api/openapi.ts`, with its headers, success schema and error statuses. A test fails when a served route is undocumented. Add a channel section to [Configuration](configuration.md#channel-event-verification) and a row to the table above.
 6. **Test.**
-   - Unit tests in `src/server/event-verification/<service>.test.ts` cover: a valid event, a challenge, a tampered body, a re-serialized body, a stale timestamp, a wrong app, and a missing or forged signature. Use the provider's published test vectors when they exist.
+   - Unit tests in `src/server/event-verification/<service>.test.ts` cover a valid event, tampered content, a wrong app, and a missing or forged signature or token. They also cover each check the protocol has. For a signed body, that means a re-serialized body and a stale timestamp. For a URL handshake, it means the challenge. For Teams, it means a `serviceUrl` that does not match the token. Use the provider's published test vectors when they exist.
    - Route tests in `src/server/connect-server.test.ts` cover: disabled token, wrong token, missing configuration, and one successful event.
    - `registry.test.ts` already checks every registered channel: the auth exemption is exact, the verifier fails closed without credentials, and an unsigned request does not echo credential values.
 
